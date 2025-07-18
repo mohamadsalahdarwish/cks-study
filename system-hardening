@@ -1,0 +1,502 @@
+### 🔐 Linux User, SSH, and `sudoers` Hardening — Quick Reference
+
+
+| Area                                      | Command / File                                                                         | What it Shows / Does                                             |  Why It Matters for CKS                 |
+| ----------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------- |
+| **Root UID**                              | *(concept)*                                                                            | Root account always has **UID 0**                                | Verify privilege escalation issues      |
+| **User identity**                         | `id`                                                                                   | UID, primary GID, groups of **current user**                     | Quick privilege snapshot                |
+|                                           | `id michael`                                                                           | Same, but for user *michael*                                     | Confirm group removal / UID             |
+| **Logged‑in users**                       | `who`                                                                                  | Users currently logged in                                        | Spot unexpected sessions                |
+|                                           | `last`                                                                                 | Login history                                                    | Audit brute‑force / abuse               |
+| **Account files**                         | `grep -i '^michael' /etc/passwd`                                                       | Ensure shell / home path                                         | `/etc/passwd` lists users & shells      |
+|                                           | `grep -i '^michael' /etc/shadow`                                                       | Check password/lock status                                       | `/etc/shadow` holds hashed PW & aging   |
+|                                           | `grep -i '^bob' /etc/group`                                                            | Check group memberships                                          | `/etc/group` lists supplementary groups |
+| **Disable login**                         | `usermod -s /bin/nologin michael`                                                      | Prevent interactive shell for *michael*                          | Least‑privilege principle               |
+| **Delete account**                        | `userdel michael`                                                                      | Remove user (keep home unless `-r`)                              | Cleanup after off‑boarding              |
+| **Remove from group**                     | `deluser michael admin`                                                                | Drops *michael* from **admin** group                             | Verify with `id michael`                |
+| **SSH basics**                            | `ssh user@host` / `ssh -l user host`                                                   | Password/key login (port 22 default)                             | Remote cluster mgmt                     |
+|                                           | `ssh-keygen -t rsa`                                                                    | Generate key pair in `~/.ssh/id_rsa*`                            | Use keys, not passwords                 |
+|                                           | `ssh-copy-id mark@node01`                                                              | Append pubkey to `node01:/home/mark/.ssh/authorized_keys`        | Enables key‑based login                 |
+| **SSH hardening**                         | `/etc/ssh/sshd_config` edits: <br>`PermitRootLogin no` <br>`PasswordAuthentication no` | Block root SSH & disable passwords                               | Force non‑root + key auth               |
+|                                           | `systemctl restart sshd`                                                               | Apply new SSH settings                                           | Must reload before testing              |
+| **`sudoers` file** 
+*(edit with `visudo or /etc/sudoers`)*      | **Entry**                                                                              | **Meaning**                                                      |                                         |
+|                                           | `root ALL=(ALL:ALL) ALL`                                                               | Root can run anything, anywhere                                  |                                         |
+|                                           | `%admin ALL=(ALL) ALL`                                                                 | Members of *admin* group can run any cmd as any user             |                                         |
+|                                           | `%sudo ALL=(ALL:ALL) ALL`                                                              | Members of *sudo* group get full sudo (Ubuntu style)             |                                         |
+|                                           | `mark ALL=(ALL:ALL) ALL`                                                               | User *mark* has full sudo rights                                 |                                         |
+|                                           | `sarah localhost=/usr/bin/shutdown -r now`                                             | *sarah* may **only** reboot via that single command on localhost |                                         |
+| **Reload sudoers safely**                 | `visudo`                                                                               | Syntax‑checked editing                                           | Prevents lockout                        |
+| **Service/log helpers**                   | `systemctl status sshd`                                                                | Confirm SSH is active after changes                              |                                         |
+|                                           | `journalctl -u sshd -f`                                                                | Live follow for authentication failures                          |                                         |
+
+> **Exam tip:** After any change, **re‑run `id`, `ssh`, or `sudo -l`** to prove the hardening took effect.
+                                       |
+
+> **Exam focus:**
+> • Root UID = 0 → avoid direct root logins.
+> • Verify user state (`id`, `/etc/passwd`, groups) after modifications.
+> • Harden `sshd_config`, restart service, test with non‑root account + key auth.
+
+Memorize this flow and you can quickly lock down user accounts and SSH in the CKS lab.
+
+
+
+## 🔧 **Systemd Service Management**
+
+| Command | Description |
+|--------|-------------|
+| `systemctl status apache2` | Check the status of the Apache2 service |
+| `systemctl list-units --type=service` | List all active systemd services |
+| `systemctl stop apache2` | Stop the Apache2 service |
+| `systemctl disable apache2` | Disable Apache2 from starting on boot |
+| `apt remove apache2` | Remove Apache2 package from the system |
+
+---
+
+## 🛡️ **Kernel Module Restrictions**
+
+| Command | Description |
+|--------|-------------|
+| `lsmod` | List all currently loaded kernel modules |
+| `modprobe pcspkr` | Add/load `pcspkr` module into the kernel |
+| `cat /etc/modprobe.d/blacklist.conf` | View the blacklist configuration file for kernel modules |
+| `blacklist pcspkr` *(inside blacklist.conf)* | Prevent `pcspkr` module from loading |
+| `shutdown -r now` | Reboot the system immediately |
+| `lsmod | grep pcspkr` | Check if `pcspkr` module is loaded |
+
+> 🧠 **Tip**: Create custom blacklist files (e.g., `/etc/modprobe.d/custom-blacklist.conf`) for cleaner management.
+
+---
+
+## 🔒 **Disable or Audit Open Ports**
+
+| Command | Description |
+|--------|-------------|
+| `netstat -an | grep -w LISTEN` | List all listening ports |
+| `cat /etc/services | grep -w 53` | Look up service names for port 53 (DNS) |
+| `netstat -natp | grep 9090` | Find processes listening on port 9090 with protocol and PID info |
+
+> 🔍 Replace `netstat` with `ss` if `netstat` is not available:  
+> `ss -tuln` (TCP/UDP listening ports)
+
+---
+
+## 📦 **APT Package Management**
+
+| Command | Description |
+|--------|-------------|
+| `apt list --installed` | List all installed packages |
+| `apt install wget` | Install `wget` package |
+| `apt remove wget` | Remove `wget` package |
+
+> 📌 You may need `sudo` prefix depending on the system configuration.
+
+------------------------
+
+
+---
+
+## 🔥 **UFW (Uncomplicated Firewall) Management**
+
+### 🔄 Installation & Initialization
+
+```bash
+apt-get update
+apt-get install ufw
+systemctl enable ufw       # Enable UFW on boot
+systemctl start ufw        # Start UFW service
+```
+
+---
+
+### 🛡️ Default Policies
+
+```bash
+ufw default allow outgoing     # Allow all outgoing connections
+ufw default deny incoming      # Deny all incoming connections
+```
+
+---
+
+### ✅ Allow Specific Traffic
+
+```bash
+ufw allow 22/tcp                                # Allow SSH
+ufw allow from <IP> to any port 22 proto tcp    # Allow SSH from specific IP
+ufw allow from <IP> to any port 80 proto tcp    # Allow HTTP from specific IP
+ufw allow from 135.22.65.0/24 to any port 9091 proto tcp  # Allow range to port 9091
+ufw allow 1000:2000/tcp                         # Allow TCP ports 1000 to 2000
+```
+
+---
+
+### ❌ Deny or Delete Rules
+
+```bash
+ufw deny 8080                        # Deny access to port 8080
+ufw delete deny 8080                # Delete deny rule for port 8080
+ufw status numbered                 # Show numbered list of rules
+ufw delete <number>                 # Delete rule by number (e.g., `ufw delete 5`)
+```
+
+---
+
+### 🔁 Reset, Enable, Disable
+
+```bash
+ufw reset                           # Reset all firewall rules
+ufw enable                          # Enable UFW firewall
+ufw disable                         # Disable UFW firewall
+ufw status                          # Show firewall status
+```
+
+---
+
+## 📡 **Check Open/Listening Ports**
+
+```bash
+netstat -an | grep -w LISTEN                # List all listening ports
+netstat -natulp | grep lighttpd            # Check ports used by lighttpd
+```
+
+> ✅ You can use `ss -tulnp` as a modern alternative to `netstat`.
+
+---------------
+
+---
+
+# 🛡️ CKS Exam Quick Reference: Seccomp, strace, Tracee, and Hardening
+
+---
+
+## 📜 **Tracing System Calls with `strace`**
+
+| Command | Description |
+|--------|-------------|
+| `which strace` | Check if `strace` is installed and its path /ur/bin/strace |
+| `strace touch /tmp/error.log` | Trace syscalls during `touch` command |
+| `strace -p 3596` | Attach `strace` to process with PID 3596 |
+| `strace -c touch /tmp/error.log` | Summary (`-c`) of syscalls during `touch` |
+| `env | wc -l` | Count environment variables |
+| `pidof etcd` | Find the PID of `etcd` service |
+
+---
+
+## 🕵️ **Tracee - Runtime Security Tracing Tool**
+
+### Basic Usage Examples
+
+```bash
+docker run --name tracee --rm --privileged --pid=host \
+-v /lib/modules/:/lib/modules/:ro \
+-v /usr/src:/usr/src:ro \
+-v /tmp/tracee:/tmp/tracee \
+aquasec/tracee:0.4.0 --trace comm=ls
+```
+
+Trace creation of new **processes**:
+
+```bash
+docker run --name tracee --rm --privileged --pid=host \
+-v /lib/modules/:/lib/modules/:ro \
+-v /usr/src:/usr/src:ro \
+-v /tmp/tracee:/tmp/tracee \
+aquasec/tracee:0.4.0 --trace pid=new
+```
+
+Trace creation of new **containers**:
+
+```bash
+docker run --name tracee --rm --privileged --pid=host \
+-v /lib/modules/:/lib/modules/:ro \
+-v /usr/src:/usr/src:ro \
+-v /tmp/tracee:/tmp/tracee \
+aquasec/tracee:0.4.0 --trace container=new
+```
+
+📚 **Reference**: [AquaSecurity Tracee GitHub](https://github.com/aquasecurity/tracee)
+
+---
+
+## 🧹 **Seccomp: Secure Computing Mode**
+
+### Check if Seccomp is Enabled
+
+```bash
+grep -i seccomp /boot/config-$(uname -r)        # Kernel config
+ps -ef                                          # List processes
+grep Seccomp /proc/1/status                     # Check Seccomp mode for PID 1, 0=> disabled ,1=> strict, 2=> filtered
+```
+
+---
+
+### Run Containers without Seccomp Restrictions
+
+```bash
+docker run -it --rm --security-opt seccomp=unconfined docker/whalesay /bin/sh
+docker run --security-opt apparmor=docker-default nginx
+```
+
+---
+
+### Lightweight Container Examples
+
+```bash
+docker run r.j3ss.co/amicontainerd amicontainerd
+kubectl run amicontainerd --image=r.j3ss.co/amicontainerd -- amicontainerd
+kubectl logs amicontainerd
+```
+
+---
+
+### 🛠️ Kubernetes `securityContext` Examples
+
+- **Default / Runtime Provided Seccomp Profile**
+
+```yaml
+spec:
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+```
+
+- **Unconfined (NO seccomp filtering)**
+
+```yaml
+spec:
+  securityContext:
+    seccompProfile:
+      type: Unconfined
+```
+
+- **Custom Local Seccomp Profile**
+
+```yaml
+spec:
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: profiles/audit.json
+```
+
+Profile stored at:
+
+```bash
+mkdir -p /var/lib/kubelet/seccomp/profiles/
+```
+
+Example `audit.json`:
+
+```json
+{
+  "defaultAction": "SCMP_ACT_LOG"
+}
+```
+
+Example `violation.json`:
+
+```json
+{
+  "defaultAction": "SCMP_ACT_ERRNO"
+}
+```
+
+✅ `SCMP_ACT_ERRNO` = **Whitelist mode** (block everything except explicitly allowed syscalls)
+
+---
+
+## 📑 **Syscall Analysis**
+
+| Command | Description |
+|--------|-------------|
+| `grep syscall /var/log/syslog` | Find syscall logs |
+| `grep -w 35 /usr/include/asm/unistd_64.h` | Map syscall number 35 to its name |
+
+---
+
+## 📚 Useful References
+
+- 📖 [Kubernetes Official Seccomp Tutorial](https://kubernetes.io/docs/tutorials/security/seccomp/)
+- 🛡️ [Tracee Runtime Security GitHub](https://github.com/aquasecurity/tracee)
+
+---
+
+Perfect, thanks for the addition!  
+I'll **integrate it properly** into the AppArmor section inside the full CKS study sheet — keeping it **clean, ordered, and polished** just like before.
+
+Here’s the **final extended version**:
+
+---
+
+# 🛡️ CKS Exam Quick Reference — Seccomp, AppArmor, Capabilities, Tracing
+
+---
+
+## 📜 **Tracing System Calls with `strace`**
+
+| Command | Purpose |
+|:--------|:--------|
+| `which strace` | Locate `strace` binary |
+| `strace touch /tmp/error.log` | Trace syscalls during `touch` |
+| `strace -p <PID>` | Attach to a running process |
+| `strace -c touch /tmp/error.log` | Syscall summary |
+
+---
+
+## 🕵️ **Tracee - Runtime Security Tracing Tool**
+
+| Command | Purpose |
+|:--------|:--------|
+| `docker run aquasec/tracee:0.4.0 --trace comm=ls` | Trace `ls` command |
+| `docker run aquasec/tracee:0.4.0 --trace pid=new` | Trace new processes |
+| `docker run aquasec/tracee:0.4.0 --trace container=new` | Trace new containers |
+
+---
+
+## 🛡️ **Seccomp Profile Management**
+
+### Check and Configure Seccomp
+
+| Command | Purpose |
+|:--------|:--------|
+| `grep -i seccomp /boot/config-$(uname -r)` | Check kernel seccomp support |
+| `grep Seccomp /proc/1/status` | Check if Seccomp is active for PID 1 |
+| `docker run --security-opt seccomp=unconfined docker/whalesay /bin/sh` | Run container without seccomp |
+
+### Kubernetes SecurityContext (Seccomp)
+
+```yaml
+spec:
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault       # or "Unconfined"
+```
+
+Custom Seccomp profile:
+
+```yaml
+spec:
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: profiles/audit.json
+```
+
+---
+
+## 🛡️ **AppArmor Profile Management**
+
+### Check AppArmor Status
+
+| Command | Purpose |
+|:--------|:--------|
+| `systemctl status apparmor` | Check if AppArmor service is active |
+| `cat /sys/module/apparmor/parameters/enabled` | Confirm if AppArmor is enabled |
+| `cat /sys/kernel/security/apparmor/profiles` | List all loaded AppArmor profiles |
+| `aa-status` | Show enforced/complain/unconfined profiles |
+
+---
+
+### Install AppArmor Utilities
+
+```bash
+apt-get install apparmor-utils
+```
+
+---
+
+### Create / Manage AppArmor Profiles
+
+| Command | Purpose |
+|:--------|:--------|
+| `aa-genprof /root/add_data.sh` | Generate a new AppArmor profile |
+| `aa-status` | Show all profiles |
+| `aa-complain` | Put profile in complain mode |
+| `aa-enforce` | Put profile in enforce mode |
+| `aa-logprof` | Update the profile if app produced some more usage logs |
+| `cat /etc/apparmor.d/<APPLICATION_NAME>` | View existing AppArmor profile |
+| `apparmor_parser /etc/apparmor.d/root.add_data.sh` | Load the profile into the kernel |
+| `apparmor_parser -R /etc/apparmor.d/root.add_data.sh` | Remove the profile from the kernel |
+| `apparmor_parser -q /etc/apparmor.d/usr.sbin.nginx-updated` | **Quietly** load updated nginx profile without verbose output |
+| `ln -s /etc/apparmor.d/root.add_data.sh /etc/apparmor.d/disable/` | Disable a specific profile by symlink |
+
+---
+
+### Default AppArmor Profile Directory 📂
+
+| Directory | Purpose |
+|:----------|:--------|
+| `/etc/apparmor.d/` | Where AppArmor profiles are stored |
+| `/etc/apparmor.d/disable/` | Where you symlink profiles to disable them |
+
+---
+
+### Kubernetes SecurityContext (AppArmor)
+
+```yaml
+spec:
+  securityContext:
+    appArmorProfile:
+      type: Localhost
+      localhostProfile: <profile-name>   # Name from /etc/apparmor.d/
+```
+
+---
+
+## 🔧 **Linux Capabilities Management**
+
+### Check Capabilities
+
+| Command | Purpose |
+|:--------|:--------|
+| `getcap /usr/bin/ping` | Check binary capabilities |
+| `ps -ef | grep /usr/sbin/sshd | grep -v grep` | Locate SSHD process |
+| `getpcaps <PID>` | Get process capabilities |
+
+---
+
+### Kubernetes Capabilities SecurityContext
+
+```yaml
+spec:
+  securityContext:
+    capabilities:
+      add: ["NET_ADMIN", "SYS_TIME"]   # Add necessary capabilities
+      drop: ["ALL"]                    # Drop all other capabilities
+```
+
+✅ Best practice: **Drop "ALL"**, then **Add** selectively.
+
+---
+
+## 📑 **Syscall and Kernel Event Analysis**
+
+| Command | Purpose |
+|:--------|:--------|
+| `grep syscall /var/log/syslog` | Find syscall audit logs |
+| `grep -w 35 /usr/include/asm/unistd_64.h` | Lookup syscall by number |
+
+---
+
+## 📚 Useful References
+
+- 📖 [Kubernetes Seccomp Tutorial](https://kubernetes.io/docs/tutorials/security/seccomp/)
+- 🛡️ [Kubernetes AppArmor Tutorial](https://kubernetes.io/docs/tutorials/clusters/apparmor/)
+- 🛡️ [AquaSecurity Tracee GitHub](https://github.com/aquasecurity/tracee/)
+
+---
+
+# 📢 Final Pro Tips for CKS
+
+| Tip | Reason |
+|:----|:-------|
+| Combine AppArmor + Seccomp + Capability Drops for maximum hardening |
+| Test AppArmor profiles in **Complain** mode before enforcing |
+| Always prefer **RuntimeDefault** seccomp unless needed otherwise |
+| Analyze syscall violations quickly through logs (`syslog`) |
+| Use Tracee to perform runtime forensics on containers |
+
+---

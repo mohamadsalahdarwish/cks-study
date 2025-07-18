@@ -1,0 +1,130 @@
+
+
+# 🛡️ CKS Exam Reference — Admission Controllers, Pod Security, Capabilities, OPA, and Cilium
+
+---
+
+## 👮 Admission Controllers
+
+### 📌 Definition
+
+**Admission Controllers** are plugins that **intercept requests to the Kubernetes API server** after authentication/authorization but **before objects are persisted**, to enforce security and governance.
+
+### 🔧 How to View/Enable Admission Plugins
+
+```bash
+kube-apiserver -h | grep enable-admission-plugins
+kubectl exec -n kube-system kube-apiserver-controlplane -- kube-apiserver -h | grep enable-admission-plugins
+ps -ef | grep kube-apiserver | grep admission-plugins
+```
+
+### ✅ Example Configuration in `kube-apiserver.yaml`
+
+```yaml
+--enable-admission-plugins=NodeRestriction,NamespaceAutoProvision
+--disable-admission-plugins=PodSecurityPolicy
+```
+
+---
+
+### 🛡️ Pod Security Admission (PSA)
+
+**Replaces deprecated PodSecurityPolicy**.
+
+```bash
+kubectl label ns payroll pod-security.kubernetes.io/enforce=restricted
+kubectl label ns payroll pod-security.kubernetes.io/audit=baseline
+kubectl label ns payroll pod-security.kubernetes.io/warn=privileged
+```
+
+| Mode    | Purpose                       |
+| ------- | ----------------------------- |
+| enforce | Block non-compliant workloads |
+| audit   | Log violations only           |
+| warn    | Warn but allow                |
+
+---
+
+## 🔐 Pod Security Contexts
+
+### Example `securityContext` at Pod/Container Level
+
+```yaml
+securityContext:
+  runAsUser: 1001
+  capabilities:
+    add: ["MAC_ADMIN", "NET_ADMIN"]
+```
+
+### Related Docker Examples
+
+```bash
+docker run --user=1001 ubuntu sleep 3600
+docker run --cap-add MAC_ADMIN ubuntu sleep 3600
+kubectl exec ubuntu-sleeper -- whoami
+```
+
+---
+
+## 🧠 OPA / Gatekeeper (Open Policy Agent)
+
+### Install & Run OPA
+
+```bash
+curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+chmod 755 ./opa
+./opa run -s
+```
+
+### Load Policies into OPA
+
+```bash
+curl -X PUT --data-binary @example.rego http://localhost:8181/v1/policies/example1
+curl http://localhost:8181/v1/policies
+./opa test example.rego
+```
+
+✅ **OPA is used for writing fine-grained policies in Rego** that enforce behavior beyond admission controllers.
+
+---
+
+## 🕵️ Runtime Detection (pgrep, runsc, etc.)
+
+```bash
+pgrep -a nginx        # Find running nginx processes
+pgrep -a runsc        # Detect gVisor (runsc) runtime
+```
+
+---
+
+## 🌐 Cilium Network Policy & WireGuard Encryption
+
+### Install Cilium with WireGuard Encryption
+
+```bash
+helm repo add cilium https://helm.cilium.io/
+helm install cilium cilium/cilium --version 1.16.3 \
+  --namespace kube-system \
+  --set encryption.enabled=true \
+  --set encryption.type=wireguard
+```
+
+### Verify Cilium
+
+```bash
+cilium status
+cilium encryption status
+```
+
+### Runtime Testing and Debugging
+
+```bash
+kubectl exec -it curlpod -- curl -s http://nginx
+kubectl -n kube-system exec -ti ds/cilium -- bash
+cilium-dbg status | grep Encryption
+tcpdump -n -i cilium_wg0 -X
+```
+
+---
+
+Would you like me to **combine everything into a printable PDF / Obsidian Markdown file** with clear headings and command blocks for fast scanning? It would help immensely during your final review.

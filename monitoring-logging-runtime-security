@@ -1,0 +1,208 @@
+
+
+# CKS Review — Monitoring, Logging & Runtime Security
+
+> **Goal:** Master Falco‑based runtime detection, Kubernetes audit logging, and pod hardening flags so you can spot and mitigate threats during the CKS exam.
+
+---
+
+## 1  Falco Runtime Security
+
+Falco listens to kernel events (via eBPF/kernel‑module) and fires alerts when a rule condition matches. Know how to install it, reload rules quickly, and customize outputs.
+
+### 1.1 Install Falco on a Node
+
+```bash
+# Import repo key & add apt repo
+curl -s https://falco.org/repo/falcosecurity-3672BA8F.asc | sudo apt-key add -
+echo "deb https://download.falco.org/packages/deb stable main" \
+  | sudo tee /etc/apt/sources.list.d/falcosecurity.list
+
+# Install headers + Falco
+sudo apt update -y
+sudo apt-get install -y linux-headers-$(uname -r) falco
+
+# Start & verify
+sudo systemctl start falco && sudo systemctl status falco
+```
+
+### 1.2 Install Falco via Helm (cluster‑wide)
+
+```bash
+/etc/falco/falco.yaml          # contains all the configuration for falco and we can get it from journalctl -fu falco   
+helm repo add falcosecurity https://falcosecurity.github.io/charts
+helm repo update
+helm install falco falcosecurity/falco
+kubectl logs -f deploy/falco -n falco       # follow Falco pod logs
+```
+
+### 1.3 Falco Service & Log Helpers
+
+```bash
+journalctl -fu falco                       # follow systemd logs
+sudo kill -1 $(cat /var/run/falco.pid)     # reload rules without restart
+cat /usr/lib/systemd/system/falco.service  # inspect service file
+cat /var/run/falco.pid                     # get pid for the falco
+kill -1  $(cat /var/run/falco.pid )        # hot reload
+```
+
+### 1.4 Custom Rule Skeleton
+
+```yaml
+# /etc/falco/falco_rules.local.yaml
+- list: linux_shells
+  items: [bash, zsh, ksh, sh, csh]
+
+- macro: in_container
+  condition: container.id != host
+
+- rule: Detect Shell inside a container
+  desc: Alert if an interactive shell starts in any container
+  condition: in_container and proc.name in (linux_shells)
+  output: "⚠️  Shell opened (user=%user.name container=%container.id cmd=%proc.cmdline)"
+  priority: WARNING
+```
+
+Rules in `falco_rules.local.yaml` **override** those in `falco_rules.yaml`.
+
+### 1.5 `falco.yaml` Output Channels
+
+```yaml
+stdout_output:
+  enabled: true
+
+file_output:
+  enabled: true
+  filename: /opt/falco/events.txt
+
+program_output:
+  enabled: true
+  program: "jq '{text: .output}' | curl -d @- -X POST https://hooks.slack.com/services/XXX"
+
+http_output:
+  enabled: true
+  url: http://alert‑collector.local/falco
+
+json_output: false        # set true when piping to Loki/Grafana
+```
+
+---
+
+## 2  Kubernetes Audit Logging
+
+The API server can write JSON audit records for every request. Configure via static‑pod flags and a policy file.
+
+### 2.1 Enable Audit Flags (`kube‑apiserver.yaml`)
+
+```yaml
+  - --audit-log-path=/var/log/k8s-audit.log
+  - --audit-policy-file=/etc/kubernetes/audit-policy.yaml
+  - --audit-log-maxage=10
+  - --audit-log-maxbackup=5
+  - --audit-log-maxsize=100
+```
+
+### 2.2 Minimal Audit Policy
+
+```yaml
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages: ["RequestReceived"]
+rules:
+  - level: RequestResponse
+    namespaces: ["prod-namespace"]
+    verbs: ["delete"]
+    resources:
+      - groups: ""
+        resources: ["pods"]
+        resourceNames: ["webapp-pod"]
+
+  - level: Metadata
+    resources:
+      - groups: ""
+        resources: ["secrets"]
+```
+
+### 2.3 Audit Stages Cheat‑Sheet
+
+| Stage              | Meaning                           |
+| ------------------ | --------------------------------- |
+| `RequestReceived`  | After authentication (very noisy) |
+| `ResponseStarted`  | First byte of response sent       |
+| `ResponseComplete` | Request finished                  |
+| `Panic`            | Apiserver panic handler fired     |
+
+### 2.4 Tail Audit Log
+
+```bash
+sudo tail -f /var/log/k8s-audit.log | jq
+```
+
+---
+
+## 3  SecurityContext Hardening
+
+Lock pods down to the least privileges needed.
+
+```yaml
+securityContext:
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+```
+
+| Flag                           | Why it matters                  |
+| ------------------------------ | ------------------------------- |
+| `privileged: false`            | Blocks host‑level device access |
+| `readOnlyRootFilesystem: true` | Thwarts in‑container tampering  |
+| `runAsNonRoot: true`           | Prevents UID 0 exploitation     |
+
+---
+
+## 4  Quick Command Recap
+
+```bash
+# Falco runtime
+sudo systemctl status falco
+journalctl -u falco | less
+grep -ri "Package management process launched in container" /etc/falco/
+
+# In‑cluster Falco (Helm)
+kubectl logs -f $(kubectl get pods -n falco -o name) -n falco
+
+# Kubernetes audit log
+sudo tail -f /var/log/k8s-audit.log
+```
+
+---
+
+## 5  Common Falco Fields (memorize a few)
+
+* `proc.name`, `proc.cmdline`
+* `container.id`, `container.image.repository`
+* `user.name`
+* `fd.name`
+* `k8s.ns.name`, `k8s.pod.name`
+
+Full list: [https://falco.org/docs/rules/supported-fields/](https://falco.org/docs/rules/supported-fields/)
+
+---
+
+## 6  Official References
+
+* Install: [https://falco.org/docs/getting-started/installation/](https://falco.org/docs/getting-started/installation/)
+* Helm: [https://github.com/falcosecurity/charts](https://github.com/falcosecurity/charts)
+* Default macros/lists: [https://falco.org/docs/rules/default-macros/](https://falco.org/docs/rules/default-macros/)
+* Audit docs: [https://kubernetes.io/docs/tasks/debug-application-cluster/audit/](https://kubernetes.io/docs/tasks/debug-application-cluster/audit/)
+
+---
+
+### ⚡ Exam Tips
+
+1. **Reload vs restart** — `kill -1 $(cat /var/run/falco.pid)` applies rule updates instantly.
+2. Keep a **ready template** (rules.local.yaml) for quick edits.
+3. Edit the **static‑pod manifest**, not systemd, for audit flags.
+4. Verify with `journalctl -u falco` or `tail -f /var/log/k8s-audit.log` before moving on.
+
+Good luck — lock down those runtimes and pass the CKS! 🚀
